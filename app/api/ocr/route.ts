@@ -62,7 +62,7 @@ export async function POST(request: NextRequest) {
 
     // Google AI SDK 초기화
     const genAI = new GoogleGenerativeAI(apiKey)
-    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" })
+    const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" })
 
     console.log("[OCR API] Gemini API 호출 시작")
 
