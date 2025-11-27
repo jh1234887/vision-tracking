@@ -19,14 +19,14 @@ export async function POST(request: NextRequest) {
 
     console.log("[OCR API] 이미지 길이:", image.length, "문자")
 
-    const apiKey = process.env.GOOGLE_VISION_API_KEY
+    const apiKey = process.env.GEMINI_API_KEY
 
     if (!apiKey) {
-      console.error("[OCR API] GOOGLE_VISION_API_KEY 환경 변수 미설정")
+      console.error("[OCR API] GEMINI_API_KEY 환경 변수 미설정")
       return NextResponse.json(
         {
           error: "API_KEY_MISSING",
-          message: "GOOGLE_VISION_API_KEY가 설정되지 않았습니다. Vars 섹션에서 환경 변수를 추가해주세요.",
+          message: "GEMINI_API_KEY가 설정되지 않았습니다. Vars 섹션에서 환경 변수를 추가해주세요.",
         },
         { status: 500 },
       )
@@ -41,8 +41,17 @@ export async function POST(request: NextRequest) {
     base64Data = base64Data.replace(/\s/g, "")
     console.log("[OCR API] Base64 처리 완료, 길이:", base64Data.length)
 
-    console.log("[OCR API] Vision API 호출 시작")
-    const apiUrl = `https://vision.googleapis.com/v1/images:annotate?key=${apiKey}`
+    // MIME 타입 추출
+    let mimeType = "image/jpeg"
+    if (image.startsWith("data:")) {
+      const mimeMatch = image.match(/data:([^;]+);/)
+      if (mimeMatch) {
+        mimeType = mimeMatch[1]
+      }
+    }
+
+    console.log("[OCR API] Gemini API 호출 시작")
+    const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3-pro-preview:generateContent?key=${apiKey}`
 
     const response = await fetch(apiUrl, {
       method: "POST",
@@ -50,30 +59,41 @@ export async function POST(request: NextRequest) {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        requests: [
+        contents: [
           {
-            image: {
-              content: base64Data,
-            },
-            features: [
+            parts: [
               {
-                type: "TEXT_DETECTION",
-                maxResults: 50,
+                text: `이 이미지에서 생산 카운터의 숫자를 읽어주세요.
+
+규칙:
+1. 이미지에 보이는 숫자들 중 가장 큰 숫자를 찾아주세요.
+2. 숫자만 응답해주세요. 다른 설명은 필요 없습니다.
+3. 숫자를 찾을 수 없으면 "NO_NUMBER"라고 응답해주세요.
+4. 콤마나 공백이 포함된 숫자는 제거하고 순수한 숫자만 반환해주세요.
+
+예시 응답: 1234`,
+              },
+              {
+                inline_data: {
+                  mime_type: mimeType,
+                  data: base64Data,
+                },
               },
             ],
-            imageContext: {
-              languageHints: ["ko", "en"],
-            },
           },
         ],
+        generationConfig: {
+          temperature: 0,
+          maxOutputTokens: 100,
+        },
       }),
     })
 
-    console.log("[OCR API] Vision API 응답 상태:", response.status, response.statusText)
+    console.log("[OCR API] Gemini API 응답 상태:", response.status, response.statusText)
 
     if (!response.ok) {
       const errorText = await response.text()
-      console.error("[OCR API] Vision API 오류 응답:", errorText)
+      console.error("[OCR API] Gemini API 오류 응답:", errorText)
 
       let errorData: any = {}
       try {
@@ -97,7 +117,7 @@ export async function POST(request: NextRequest) {
         return NextResponse.json(
           {
             error: "API_KEY_INVALID",
-            message: "API 키가 유효하지 않습니다. Vars 섹션에서 올바른 GOOGLE_VISION_API_KEY를 설정해주세요.",
+            message: "API 키가 유효하지 않습니다. Vars 섹션에서 올바른 GEMINI_API_KEY를 설정해주세요.",
             details: errorData,
           },
           { status: 403 },
@@ -117,7 +137,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json(
         {
           error: "API_ERROR",
-          message: "Vision API 오류가 발생했습니다.",
+          message: "Gemini API 오류가 발생했습니다.",
           details: errorData,
         },
         { status: 500 },
@@ -125,10 +145,10 @@ export async function POST(request: NextRequest) {
     }
 
     const data = await response.json()
-    console.log("[OCR API] Vision API 성공")
+    console.log("[OCR API] Gemini API 성공")
 
-    if (!data.responses || !data.responses[0]) {
-      console.error("[OCR API] 응답 구조 이상")
+    if (!data.candidates || !data.candidates[0]) {
+      console.error("[OCR API] 응답 구조 이상:", JSON.stringify(data))
       return NextResponse.json({
         error: "INVALID_RESPONSE",
         message: "응답 형식이 올바르지 않습니다.",
@@ -136,18 +156,19 @@ export async function POST(request: NextRequest) {
       })
     }
 
-    const firstResponse = data.responses[0]
+    const candidate = data.candidates[0]
 
-    if (firstResponse.error) {
-      console.error("[OCR API] Vision API 에러:", firstResponse.error)
+    if (candidate.finishReason === "SAFETY") {
+      console.error("[OCR API] 안전 필터에 의해 차단됨")
       return NextResponse.json({
-        error: "VISION_ERROR",
-        message: firstResponse.error.message || "Vision API 처리 오류",
+        error: "SAFETY_BLOCKED",
+        message: "이미지가 안전 필터에 의해 차단되었습니다.",
         number: null,
       })
     }
 
-    if (!firstResponse.textAnnotations || firstResponse.textAnnotations.length === 0) {
+    const textContent = candidate.content?.parts?.[0]?.text
+    if (!textContent) {
       console.log("[OCR API] 텍스트 미인식")
       return NextResponse.json({
         error: "NO_TEXT",
@@ -156,26 +177,10 @@ export async function POST(request: NextRequest) {
       })
     }
 
-    const allTexts: string[] = firstResponse.textAnnotations.map((a: any) => a.description).filter(Boolean)
-    console.log("[OCR API] 인식된 텍스트 샘플:", allTexts.slice(0, 10))
+    console.log("[OCR API] Gemini 응답:", textContent)
 
-    const allNumbers: number[] = []
-    for (const text of allTexts) {
-      const cleanedText = text.replace(/[,\s]/g, "")
-      const numbers = cleanedText.match(/\d+/g)
-      if (numbers) {
-        numbers.forEach((num) => {
-          const parsed = Number.parseInt(num, 10)
-          if (!isNaN(parsed) && parsed > 0) {
-            allNumbers.push(parsed)
-          }
-        })
-      }
-    }
-
-    console.log("[OCR API] 추출된 모든 숫자:", allNumbers)
-
-    if (allNumbers.length === 0) {
+    // "NO_NUMBER" 응답 처리
+    if (textContent.trim().toUpperCase() === "NO_NUMBER") {
       console.log("[OCR API] 숫자 미발견")
       return NextResponse.json({
         error: "NO_NUMBERS",
@@ -184,25 +189,33 @@ export async function POST(request: NextRequest) {
       })
     }
 
-    const fourDigitNumbers = allNumbers.filter((n) => n >= 1000 && n <= 9999)
-    const threeDigitNumbers = allNumbers.filter((n) => n >= 100 && n <= 999)
-    const twoDigitNumbers = allNumbers.filter((n) => n >= 10 && n <= 99)
+    // 숫자 추출
+    const cleanedText = textContent.replace(/[,\s]/g, "")
+    const numbers = cleanedText.match(/\d+/g)
 
-    let selectedNumber: number
-
-    if (fourDigitNumbers.length > 0) {
-      selectedNumber = Math.max(...fourDigitNumbers)
-      console.log("[OCR API] 4자리 숫자 선택:", selectedNumber)
-    } else if (threeDigitNumbers.length > 0) {
-      selectedNumber = Math.max(...threeDigitNumbers)
-      console.log("[OCR API] 3자리 숫자 선택:", selectedNumber)
-    } else if (twoDigitNumbers.length > 0) {
-      selectedNumber = Math.max(...twoDigitNumbers)
-      console.log("[OCR API] 2자리 숫자 선택:", selectedNumber)
-    } else {
-      selectedNumber = Math.max(...allNumbers)
-      console.log("[OCR API] 최대값 선택:", selectedNumber)
+    if (!numbers || numbers.length === 0) {
+      console.log("[OCR API] 숫자 미발견")
+      return NextResponse.json({
+        error: "NO_NUMBERS",
+        message: "숫자를 인식할 수 없습니다.",
+        number: null,
+      })
     }
+
+    const allNumbers = numbers.map((num) => Number.parseInt(num, 10)).filter((n) => !isNaN(n) && n > 0)
+    console.log("[OCR API] 추출된 모든 숫자:", allNumbers)
+
+    if (allNumbers.length === 0) {
+      console.log("[OCR API] 유효한 숫자 없음")
+      return NextResponse.json({
+        error: "NO_NUMBERS",
+        message: "숫자를 인식할 수 없습니다.",
+        number: null,
+      })
+    }
+
+    // 가장 큰 숫자 선택
+    const selectedNumber = Math.max(...allNumbers)
 
     console.log("[OCR API] 최종 인식 숫자:", selectedNumber)
     return NextResponse.json({ number: selectedNumber })
