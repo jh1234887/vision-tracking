@@ -163,7 +163,7 @@ export default function ProductionTrackerApp() {
           console.error("[클라이언트] API 오류 응답:", data)
 
           if (data.error === "API_KEY_MISSING") {
-            throw new Error("API 키가 설정되지 않았습니다. Vars 섹션에서 GOOGLE_VISION_API_KEY를 추가해주세요.")
+            throw new Error("API 키가 설정되지 않았습니다. Vars 섹션에서 GEMINI_API_KEY를 추가해주세요.")
           } else if (data.error === "IMAGE_TOO_LARGE") {
             throw new Error("이미지가 너무 큽니다. 다시 촬영해주세요.")
           } else if (data.error === "NO_TEXT") {
@@ -171,7 +171,7 @@ export default function ProductionTrackerApp() {
           } else if (data.error === "NO_NUMBERS") {
             throw new Error("숫자를 인식할 수 없습니다. 제품 카운터를 정면에서 촬영해주세요.")
           } else {
-            throw new Error(data.message || "Vision API 처리 중 오류가 발생했습니다.")
+            throw new Error(data.message || "Gemini API 처리 중 오류가 발생했습니다.")
           }
         } else {
           const text = await response.text()
