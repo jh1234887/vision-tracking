@@ -6,11 +6,24 @@ import { useState, useRef } from "react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { Camera, TrendingUp, FileText, Edit2, Loader2 } from "lucide-react"
+import { Camera, TrendingUp, FileText, Edit2, Loader2, AlertCircle } from "lucide-react"
 import { Area, AreaChart, ResponsiveContainer, XAxis, YAxis, Tooltip, CartesianGrid } from "recharts"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+
+// API 응답 타입
+interface OCRResponse {
+  isRelevant: boolean
+  boxCount: number | null
+  bottleCount: number | null
+  bpm: number | null
+  status: "normal" | "slow" | "unknown"
+  summary: string
+  rawText: string
+  error?: string
+  message?: string
+}
 
 type LogEntry = {
   id: string
@@ -18,8 +31,10 @@ type LogEntry = {
   boxes: number
   bottles: number
   bpm: number
-  status: "정상" | "느림"
+  status: "정상" | "느림" | "알수없음"
   imageUrl?: string
+  summary?: string
+  isRelevant: boolean
 }
 
 type Tab = "dashboard" | "logs" | "settings"
@@ -62,9 +77,12 @@ export default function ProductionTrackerApp() {
   const [photoTime, setPhotoTime] = useState("")
   const [photoDate, setPhotoDate] = useState("")
   const [ocrError, setOcrError] = useState<string | null>(null)
+  const [lastIrrelevantSummary, setLastIrrelevantSummary] = useState<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
-  const latestLog = logs[logs.length - 1]
+  // 관련 있는 로그만 필터링
+  const relevantLogs = logs.filter(log => log.isRelevant)
+  const latestLog = relevantLogs[relevantLogs.length - 1]
   const currentBpm = latestLog?.bpm || 0
   const totalBoxes = latestLog?.boxes || 0
   const totalBottles = latestLog?.bottles || 0
@@ -78,6 +96,12 @@ export default function ProductionTrackerApp() {
     if (minutes === 0) return "방금 전"
     if (minutes === 1) return "1분 전"
     return `${minutes}분 전`
+  }
+
+  const getStatusText = (status: "normal" | "slow" | "unknown" | "정상" | "느림" | "알수없음"): "정상" | "느림" | "알수없음" => {
+    if (status === "normal" || status === "정상") return "정상"
+    if (status === "slow" || status === "느림") return "느림"
+    return "알수없음"
   }
 
   const handleCameraScan = () => {
@@ -117,6 +141,7 @@ export default function ProductionTrackerApp() {
 
         setCapturedImage(compressedImage)
         setOcrError(null)
+        setLastIrrelevantSummary(null)
 
         const now = new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Seoul" }))
         const year = now.getFullYear()
@@ -137,66 +162,56 @@ export default function ProductionTrackerApp() {
     event.target.value = ""
   }
 
-  const extractNumberFromImage = async (base64Image: string): Promise<number | null> => {
+  const analyzeImage = async (base64Image: string): Promise<OCRResponse> => {
     try {
       console.log("[클라이언트] OCR API 호출 시작")
-      console.log("[클라이언트] 이미지 크기:", base64Image.length, "문자")
+
+      // 이전 데이터 준비 (BPM 계산용)
+      const previousLog = relevantLogs[relevantLogs.length - 1]
+      const requestBody: any = { image: base64Image }
+
+      if (previousLog) {
+        requestBody.previousBottleCount = previousLog.bottles
+        requestBody.previousTimestamp = previousLog.timestamp.getTime()
+      }
 
       const response = await fetch("/api/ocr", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({
-          image: base64Image,
-        }),
+        body: JSON.stringify(requestBody),
       })
 
       console.log("[클라이언트] API 응답 상태:", response.status)
 
       if (!response.ok) {
-        const contentType = response.headers.get("content-type")
-        console.log("[클라이언트] 응답 Content-Type:", contentType)
+        const data = await response.json()
+        console.error("[클라이언트] API 오류 응답:", data)
 
-        if (contentType && contentType.includes("application/json")) {
-          const data = await response.json()
-          console.error("[클라이언트] API 오류 응답:", data)
-
-          if (data.error === "API_KEY_MISSING") {
-            throw new Error("API 키가 설정되지 않았습니다. Vars 섹션에서 GEMINI_API_KEY를 추가해주세요.")
-          } else if (data.error === "IMAGE_TOO_LARGE") {
-            throw new Error("이미지가 너무 큽니다. 다시 촬영해주세요.")
-          } else if (data.error === "NO_TEXT") {
-            throw new Error("이미지에서 텍스트를 찾을 수 없습니다. 제품 카운터가 선명하게 보이도록 촬영해주세요.")
-          } else if (data.error === "NO_NUMBERS") {
-            throw new Error("숫자를 인식할 수 없습니다. 제품 카운터를 정면에서 촬영해주세요.")
-          } else {
-            throw new Error(data.message || "Gemini API 처리 중 오류가 발생했습니다.")
-          }
+        if (data.error === "API_KEY_MISSING") {
+          throw new Error("API 키가 설정되지 않았습니다. Vars 섹션에서 GEMINI_API_KEY를 추가해주세요.")
+        } else if (data.error === "API_KEY_INVALID") {
+          throw new Error("API 키가 유효하지 않습니다. 올바른 GEMINI_API_KEY를 설정해주세요.")
+        } else if (data.error === "QUOTA_EXCEEDED") {
+          throw new Error("API 할당량이 초과되었습니다. 잠시 후 다시 시도해주세요.")
+        } else if (data.error === "SAFETY_BLOCKED") {
+          throw new Error("이미지가 안전 필터에 의해 차단되었습니다. 다른 이미지를 사용해주세요.")
         } else {
-          const text = await response.text()
-          console.error("[클라이언트] 비-JSON 응답:", text.substring(0, 200))
-          throw new Error("서버 응답 오류가 발생했습니다. 다시 시도해주세요.")
+          throw new Error(data.message || "API 처리 중 오류가 발생했습니다.")
         }
       }
 
-      const data = await response.json()
+      const data: OCRResponse = await response.json()
       console.log("[클라이언트] API 성공 응답:", data)
 
       if (data.error) {
-        console.error("[클라이언트] 데이터 내 오류:", data.error)
-        throw new Error(data.message || "숫자 인식에 실패했습니다.")
+        throw new Error(data.message || "이미지 분석에 실패했습니다.")
       }
 
-      if (data.number === null || data.number === undefined) {
-        console.log("[클라이언트] 숫자 미인식")
-        return null
-      }
-
-      console.log("[클라이언트] 인식 성공:", data.number)
-      return data.number
+      return data
     } catch (error) {
-      console.error("[클라이언트] extractNumberFromImage 에러:", error)
+      console.error("[클라이언트] analyzeImage 에러:", error)
       throw error
     }
   }
@@ -217,11 +232,11 @@ export default function ProductionTrackerApp() {
     setLogs((prev) =>
       prev.map((log) => {
         if (log.id === editingLog.id) {
-          const logIndex = prev.findIndex((l) => l.id === log.id)
+          const relevantLogsBeforeThis = prev.filter(l => l.isRelevant && l.timestamp < log.timestamp)
           let newBpm = log.bpm
 
-          if (logIndex > 0) {
-            const previousLog = prev[logIndex - 1]
+          if (relevantLogsBeforeThis.length > 0) {
+            const previousLog = relevantLogsBeforeThis[relevantLogsBeforeThis.length - 1]
             const timeDiffMinutes = (log.timestamp.getTime() - previousLog.timestamp.getTime()) / 60000
             const bottlesDiff = newBottles - previousLog.bottles
 
@@ -235,7 +250,7 @@ export default function ProductionTrackerApp() {
             boxes: newBoxes,
             bottles: newBottles,
             bpm: Math.max(0, newBpm),
-            status: newBpm >= 600 ? "정상" : "느림",
+            status: newBpm >= 50 ? "정상" : "느림",
           }
         }
         return log
@@ -254,32 +269,49 @@ export default function ProductionTrackerApp() {
     setShowTimeInputDialog(false)
     setIsScanning(true)
     setOcrError(null)
+    setLastIrrelevantSummary(null)
 
     try {
-      console.log("[v0] OCR 시작")
-      const boxes = await extractNumberFromImage(capturedImage)
-
-      if (boxes === null) {
-        console.error("[v0] 숫자 인식 실패")
-        setOcrError("숫자를 인식할 수 없습니다. 제품 카운터가 명확하게 보이도록 다시 촬영해주세요.")
-        setIsScanning(false)
-        setCapturedImage(null)
-        return
-      }
-
-      console.log("[v0] OCR 성공, 인식된 박스:", boxes)
-
-      const bottles = boxes * 100
+      console.log("[v0] 이미지 분석 시작")
+      const result = await analyzeImage(capturedImage)
 
       const [year, month, day] = photoDate.split("-").map(Number)
       const [hours, minutes] = photoTime.split(":").map(Number)
       const timestamp = new Date(year, month - 1, day, hours, minutes, 0)
 
-      console.log("[v0] 기록 생성 - 박스:", boxes, "병:", bottles, "시간:", timestamp)
+      // 관련 없는 이미지인 경우
+      if (!result.isRelevant) {
+        console.log("[v0] 관련 없는 이미지:", result.summary)
+        setLastIrrelevantSummary(result.summary)
 
-      let bpm = 0
-      if (logs.length > 0) {
-        const previousLog = logs[logs.length - 1]
+        const newLog: LogEntry = {
+          id: Date.now().toString(),
+          timestamp,
+          boxes: 0,
+          bottles: 0,
+          bpm: 0,
+          status: "알수없음",
+          imageUrl: capturedImage,
+          summary: result.summary,
+          isRelevant: false,
+        }
+
+        setLogs((prev) => [...prev, newLog])
+        setIsScanning(false)
+        setCapturedImage(null)
+        setPhotoTime("")
+        setPhotoDate("")
+        return
+      }
+
+      // 관련 있는 이미지인 경우
+      const boxes = result.boxCount || 0
+      const bottles = result.bottleCount || boxes * 100
+
+      // BPM 계산 (API에서 계산된 값 사용, 없으면 직접 계산)
+      let bpm = result.bpm || 0
+      if (bpm === 0 && relevantLogs.length > 0) {
+        const previousLog = relevantLogs[relevantLogs.length - 1]
         const timeDiffMinutes = (timestamp.getTime() - previousLog.timestamp.getTime()) / 60000
         const bottlesDiff = bottles - previousLog.bottles
 
@@ -288,7 +320,9 @@ export default function ProductionTrackerApp() {
         }
       }
 
-      console.log("[v0] 계산된 BPM:", bpm)
+      const status = getStatusText(result.status || (bpm >= 50 ? "normal" : "slow"))
+
+      console.log("[v0] 기록 생성 - 박스:", boxes, "병:", bottles, "BPM:", bpm, "상태:", status)
 
       const newLog: LogEntry = {
         id: Date.now().toString(),
@@ -296,8 +330,10 @@ export default function ProductionTrackerApp() {
         boxes,
         bottles,
         bpm: Math.max(0, bpm),
-        status: bpm >= 600 ? "정상" : "느림",
+        status,
         imageUrl: capturedImage,
+        summary: result.summary,
+        isRelevant: true,
       }
 
       console.log("[v0] 새 기록 추가:", newLog)
@@ -310,21 +346,22 @@ export default function ProductionTrackerApp() {
 
       console.log("[v0] 기록 저장 완료")
     } catch (error) {
-      console.error("[v0] OCR 에러:", error)
+      console.error("[v0] 분석 에러:", error)
       setOcrError(error instanceof Error ? error.message : "이미지 처리 중 오류가 발생했습니다.")
       setIsScanning(false)
       setCapturedImage(null)
     }
   }
 
-  const chartData = logs.slice(-10).map((log) => ({
+  const chartData = relevantLogs.slice(-10).map((log) => ({
     time: formatKST(log.timestamp, "HH:mm"),
     boxes: log.boxes,
+    bottles: log.bottles,
     bpm: log.bpm,
   }))
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
       <div className="bg-blue-600 text-white p-4 shadow-md">
         <div className="flex items-center justify-between mb-3">
           <h1 className="text-xl font-bold">생산량 실시간 추적</h1>
@@ -354,14 +391,41 @@ export default function ProductionTrackerApp() {
             <div className="text-2xl font-bold">{currentBpm}</div>
           </div>
         </div>
+
+        {latestLog && (
+          <div className="mt-2 text-center">
+            <span className={`inline-block px-3 py-1 rounded-full text-sm ${
+              latestLog.status === "정상" ? "bg-green-500" :
+              latestLog.status === "느림" ? "bg-orange-500" : "bg-gray-500"
+            }`}>
+              상태: {latestLog.status}
+            </span>
+          </div>
+        )}
       </div>
 
       <div className="p-4 space-y-4">
-        {ocrError && <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded">{ocrError}</div>}
+        {ocrError && (
+          <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded dark:bg-red-900 dark:border-red-700 dark:text-red-200">
+            {ocrError}
+          </div>
+        )}
 
-        <Card>
+        {lastIrrelevantSummary && (
+          <div className="bg-yellow-100 border border-yellow-400 text-yellow-800 px-4 py-3 rounded dark:bg-yellow-900 dark:border-yellow-700 dark:text-yellow-200">
+            <div className="flex items-start gap-2">
+              <AlertCircle className="w-5 h-5 mt-0.5 flex-shrink-0" />
+              <div>
+                <div className="font-semibold">생산 카운터 이미지가 아닙니다</div>
+                <div className="text-sm mt-1">{lastIrrelevantSummary}</div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        <Card className="dark:bg-gray-800 dark:border-gray-700">
           <CardHeader className="pb-3">
-            <CardTitle className="text-base flex items-center gap-2">
+            <CardTitle className="text-base flex items-center gap-2 dark:text-white">
               <Camera className="w-5 h-5" />
               카메라 스캔
             </CardTitle>
@@ -375,7 +439,7 @@ export default function ProductionTrackerApp() {
               {isScanning ? (
                 <>
                   <Loader2 className="w-5 h-5 mr-2 animate-spin" />
-                  숫자 인식 중...
+                  이미지 분석 중...
                 </>
               ) : (
                 <>
@@ -392,14 +456,16 @@ export default function ProductionTrackerApp() {
               onChange={handleImageCapture}
               className="hidden"
             />
-            <div className="mt-2 text-sm text-gray-500 text-center">마지막 스캔: {getTimeSinceLastScan()}</div>
+            <div className="mt-2 text-sm text-gray-500 dark:text-gray-400 text-center">
+              마지막 스캔: {getTimeSinceLastScan()}
+            </div>
           </CardContent>
         </Card>
 
         {chartData.length > 0 && (
-          <Card>
+          <Card className="dark:bg-gray-800 dark:border-gray-700">
             <CardHeader className="pb-3">
-              <CardTitle className="text-base flex items-center gap-2">
+              <CardTitle className="text-base flex items-center gap-2 dark:text-white">
                 <TrendingUp className="w-5 h-5" />
                 생산 추이
               </CardTitle>
@@ -410,17 +476,31 @@ export default function ProductionTrackerApp() {
                   <CartesianGrid strokeDasharray="3 3" />
                   <XAxis dataKey="time" />
                   <YAxis />
-                  <Tooltip />
-                  <Area type="monotone" dataKey="boxes" stroke="#3b82f6" fill="#93c5fd" />
+                  <Tooltip
+                    content={({ active, payload, label }) => {
+                      if (active && payload && payload.length) {
+                        return (
+                          <div className="bg-white dark:bg-gray-800 p-2 border rounded shadow">
+                            <p className="text-sm font-semibold">{label}</p>
+                            <p className="text-sm text-blue-600">박스: {payload[0]?.payload?.boxes}</p>
+                            <p className="text-sm text-green-600">병: {payload[0]?.payload?.bottles}</p>
+                            <p className="text-sm text-purple-600">BPM: {payload[0]?.payload?.bpm}</p>
+                          </div>
+                        )
+                      }
+                      return null
+                    }}
+                  />
+                  <Area type="monotone" dataKey="bottles" stroke="#3b82f6" fill="#93c5fd" name="병" />
                 </AreaChart>
               </ResponsiveContainer>
             </CardContent>
           </Card>
         )}
 
-        <Card>
+        <Card className="dark:bg-gray-800 dark:border-gray-700">
           <CardHeader className="pb-3">
-            <CardTitle className="text-base flex items-center gap-2">
+            <CardTitle className="text-base flex items-center gap-2 dark:text-white">
               <FileText className="w-5 h-5" />
               최근 기록
             </CardTitle>
@@ -428,29 +508,59 @@ export default function ProductionTrackerApp() {
           <CardContent>
             <div className="space-y-2">
               {logs.length === 0 ? (
-                <div className="text-center text-gray-500 py-8">아직 기록이 없습니다</div>
+                <div className="text-center text-gray-500 dark:text-gray-400 py-8">아직 기록이 없습니다</div>
               ) : (
                 logs
                   .slice()
                   .reverse()
                   .map((log) => (
-                    <div key={log.id} className="border rounded-lg p-3 bg-white">
+                    <div
+                      key={log.id}
+                      className={`border rounded-lg p-3 ${
+                        log.isRelevant
+                          ? "bg-white dark:bg-gray-700 dark:border-gray-600"
+                          : "bg-gray-100 dark:bg-gray-800 dark:border-gray-600 opacity-75"
+                      }`}
+                    >
                       <div className="flex justify-between items-start mb-2">
                         <div className="flex-1">
-                          <div className="text-sm text-gray-500">{formatKST(log.timestamp, "M월 d일, HH:mm:ss")}</div>
-                          <div className="font-semibold mt-1">
-                            {log.boxes.toLocaleString()} 박스 ({log.bottles.toLocaleString()} 병)
+                          <div className="text-sm text-gray-500 dark:text-gray-400">
+                            {formatKST(log.timestamp, "M월 d일, HH:mm:ss")}
                           </div>
-                          <div className="text-sm text-gray-600 mt-1">
-                            속도: {log.bpm} BPM{" "}
-                            <span className={log.status === "정상" ? "text-green-600" : "text-orange-600"}>
-                              ({log.status})
-                            </span>
-                          </div>
+                          {log.isRelevant ? (
+                            <>
+                              <div className="font-semibold mt-1 dark:text-white">
+                                {log.boxes.toLocaleString()} 박스 ({log.bottles.toLocaleString()} 병)
+                              </div>
+                              <div className="text-sm text-gray-600 dark:text-gray-300 mt-1">
+                                속도: {log.bpm} BPM{" "}
+                                <span className={
+                                  log.status === "정상" ? "text-green-600 dark:text-green-400" :
+                                  log.status === "느림" ? "text-orange-600 dark:text-orange-400" :
+                                  "text-gray-600 dark:text-gray-400"
+                                }>
+                                  ({log.status})
+                                </span>
+                              </div>
+                            </>
+                          ) : (
+                            <div className="mt-1">
+                              <span className="inline-block px-2 py-1 bg-yellow-100 dark:bg-yellow-900 text-yellow-800 dark:text-yellow-200 text-xs rounded">
+                                관련 없는 이미지
+                              </span>
+                              {log.summary && (
+                                <div className="text-sm text-gray-600 dark:text-gray-400 mt-1">
+                                  {log.summary}
+                                </div>
+                              )}
+                            </div>
+                          )}
                         </div>
-                        <Button variant="ghost" size="sm" onClick={() => handleEditLog(log)}>
-                          <Edit2 className="w-4 h-4" />
-                        </Button>
+                        {log.isRelevant && (
+                          <Button variant="ghost" size="sm" onClick={() => handleEditLog(log)}>
+                            <Edit2 className="w-4 h-4" />
+                          </Button>
+                        )}
                       </div>
                       {log.imageUrl && (
                         <img
@@ -468,9 +578,9 @@ export default function ProductionTrackerApp() {
       </div>
 
       <Dialog open={showTimeInputDialog} onOpenChange={setShowTimeInputDialog}>
-        <DialogContent>
+        <DialogContent className="dark:bg-gray-800 dark:border-gray-700">
           <DialogHeader>
-            <DialogTitle>촬영 시간 확인</DialogTitle>
+            <DialogTitle className="dark:text-white">촬영 시간 확인</DialogTitle>
           </DialogHeader>
           <div className="space-y-4 py-4">
             {capturedImage && (
@@ -479,12 +589,24 @@ export default function ProductionTrackerApp() {
               </div>
             )}
             <div className="space-y-2">
-              <Label htmlFor="photo-date">날짜</Label>
-              <Input id="photo-date" type="date" value={photoDate} onChange={(e) => setPhotoDate(e.target.value)} />
+              <Label htmlFor="photo-date" className="dark:text-white">날짜</Label>
+              <Input
+                id="photo-date"
+                type="date"
+                value={photoDate}
+                onChange={(e) => setPhotoDate(e.target.value)}
+                className="dark:bg-gray-700 dark:border-gray-600 dark:text-white"
+              />
             </div>
             <div className="space-y-2">
-              <Label htmlFor="photo-time">시간</Label>
-              <Input id="photo-time" type="time" value={photoTime} onChange={(e) => setPhotoTime(e.target.value)} />
+              <Label htmlFor="photo-time" className="dark:text-white">시간</Label>
+              <Input
+                id="photo-time"
+                type="time"
+                value={photoTime}
+                onChange={(e) => setPhotoTime(e.target.value)}
+                className="dark:bg-gray-700 dark:border-gray-600 dark:text-white"
+              />
             </div>
           </div>
           <DialogFooter>
@@ -497,21 +619,24 @@ export default function ProductionTrackerApp() {
       </Dialog>
 
       <Dialog open={editingLog !== null} onOpenChange={(open) => !open && setEditingLog(null)}>
-        <DialogContent>
+        <DialogContent className="dark:bg-gray-800 dark:border-gray-700">
           <DialogHeader>
-            <DialogTitle>수량 수정</DialogTitle>
+            <DialogTitle className="dark:text-white">수량 수정</DialogTitle>
           </DialogHeader>
           <div className="space-y-4 py-4">
             <div className="space-y-2">
-              <Label htmlFor="edit-boxes">박스 수량</Label>
+              <Label htmlFor="edit-boxes" className="dark:text-white">박스 수량</Label>
               <Input
                 id="edit-boxes"
                 type="number"
                 value={editValue}
                 onChange={(e) => setEditValue(e.target.value)}
                 min="0"
+                className="dark:bg-gray-700 dark:border-gray-600 dark:text-white"
               />
-              <div className="text-sm text-gray-500">병 수량: {(Number.parseInt(editValue) || 0) * 100} 병</div>
+              <div className="text-sm text-gray-500 dark:text-gray-400">
+                병 수량: {(Number.parseInt(editValue) || 0) * 100} 병
+              </div>
             </div>
           </div>
           <DialogFooter>
