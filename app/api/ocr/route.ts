@@ -51,7 +51,7 @@ export async function POST(request: NextRequest) {
     }
 
     console.log("[OCR API] Gemini API 호출 시작")
-    const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3-pro-preview:generateContent?key=${apiKey}`
+    const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro-preview-06-05:generateContent?key=${apiKey}`
 
     const response = await fetch(apiUrl, {
       method: "POST",
