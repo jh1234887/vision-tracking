@@ -109,14 +109,14 @@ JSON 응답 형식:
   "summary": "생산 현황판 디스플레이"
 }
 
-예시 2 (관련 있는 이미지):
+예시 2 (관련 있는 이미지 - 부자재 납품정보 이미지):
 {
   "isRelevant": true,
   "operatingLine": null,
   "productionDate": "2025-10-30",
-  "plannedQuantity": 650,
+  "plannedQuantity": null,
   "productName": "7710047)비타500 70ml*60",
-  "completedQuantity": null,
+  "completedQuantity": 650,
   "lotNo": null,
   "customerName": "광동제약(주)",
   "summary": "부자재 납품정보"
