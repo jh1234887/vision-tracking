@@ -80,6 +80,7 @@ export async function POST(request: NextRequest) {
    - productName: 제품명 (없으면 null)
    - completedQuantity: 생산완료량 (숫자, 없으면 null)
    - lotNo: LOT NO 또는 로트번호 (없으면 null)
+   - 거래처: 거래처명 (없으면 null)
 3. 관련 없는 이미지라면 이미지 내용을 요약합니다.
 
 JSON 응답 형식:
@@ -91,6 +92,7 @@ JSON 응답 형식:
   "productName": "제품명" 또는 null,
   "completedQuantity": 숫자 또는 null,
   "lotNo": "LOT 번호" 또는 null,
+  "customerName": "거래처명" 또는 null,
   "summary": "이미지 설명 (관련 없는 경우 상세히, 관련 있는 경우 간단히)"
 }
 
@@ -103,10 +105,25 @@ JSON 응답 형식:
   "productName": "생수 500ml",
   "completedQuantity": 3450,
   "lotNo": "LOT-20251128-001",
+  "customerName": null,
   "summary": "생산 현황판 디스플레이"
 }
 
-예시 2 (관련 없는 이미지):
+예시 2 (관련 있는 이미지):
+{
+  "isRelevant": true,
+  "operatingLine": null,
+  "productionDate": "2025-10-30",
+  "plannedQuantity": 650,
+  "productName": "7710047)비타500 70ml*60",
+  "completedQuantity": null,
+  "lotNo": null,
+  "customerName": "광동제약(주)",
+  "summary": "부자재 납품정보"
+}
+
+
+예시 3 (관련 없는 이미지):
 {
   "isRelevant": false,
   "operatingLine": null,
@@ -115,6 +132,7 @@ JSON 응답 형식:
   "productName": null,
   "completedQuantity": null,
   "lotNo": null,
+  "customerName": null,
   "summary": "사무실 풍경 사진입니다. 책상, 컴퓨터, 의자가 보입니다."
 }
 
