@@ -77,7 +77,7 @@ export async function POST(request: NextRequest) {
    - operatingLine: 운영라인 (예: "1호기", "A라인" 등, 없으면 null) - A, B, C 위에 동그라미 그려진 것을 선택
    - productionDate: 생산일 (YYYY-MM-DD 형식, 없으면 null) - 현재 날짜기준 1년 이상 차이나지 않음. 
    - plannedQuantity: 생산계획량 (숫자, 없으면 null)
-   - productName: 제품명 (용량 포함이면 용량까지 포함, 없으면 null)
+   - productName: 제품명 (ml 와 같은 용량 및 수량 포함이면 포함해서 추출, 없으면 null) - 예: "비타500 70ml*60", "쌍화탕" 등등
    - completedQuantity: 생산완료량 (숫자, 없으면 null)
    - lotNo: LOT NO 또는 로트번호 (없으면 null)
    - 거래처: 거래처명 (없으면 null)
