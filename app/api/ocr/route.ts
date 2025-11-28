@@ -75,7 +75,7 @@ export async function POST(request: NextRequest) {
 1. 생산 현황판, 디지털 디스플레이, 생산 정보를 보여주는 이미지인지 확인합니다.
 2. 관련 이미지라면 다음 정보를 추출합니다:
    - operatingLine: 운영라인 (예: "1호기", "A라인" 등, 없으면 null) - A, B, C 위에 동그라미 그려진 것을 선택
-   - productionDate: 생산일 (YYYY-MM-DD 형식, 없으면 null)
+   - productionDate: 생산일 (YYYY-MM-DD 형식, 없으면 null) - 현재 날짜기준 1년 이상 차이나지 않음. 
    - plannedQuantity: 생산계획량 (숫자, 없으면 null)
    - productName: 제품명 (없으면 null)
    - completedQuantity: 생산완료량 (숫자, 없으면 null)
