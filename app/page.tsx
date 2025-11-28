@@ -15,10 +15,12 @@ import { Label } from "@/components/ui/label"
 // API 응답 타입
 interface OCRResponse {
   isRelevant: boolean
-  boxCount: number | null
-  bottleCount: number | null
-  bpm: number | null
-  status: "normal" | "slow" | "unknown"
+  operatingLine: string | null      // 운영라인
+  productionDate: string | null     // 생산일
+  plannedQuantity: number | null    // 생산계획량
+  productName: string | null        // 제품명
+  completedQuantity: number | null  // 생산완료량
+  lotNo: string | null              // LOT NO
   summary: string
   rawText: string
   error?: string
@@ -28,10 +30,12 @@ interface OCRResponse {
 type LogEntry = {
   id: string
   timestamp: Date
-  boxes: number
-  bottles: number
-  bpm: number
-  status: "정상" | "느림" | "알수없음"
+  operatingLine: string | null      // 운영라인
+  productionDate: string | null     // 생산일
+  plannedQuantity: number | null    // 생산계획량
+  productName: string | null        // 제품명
+  completedQuantity: number | null  // 생산완료량
+  lotNo: string | null              // LOT NO
   imageUrl?: string
   summary?: string
   isRelevant: boolean
@@ -83,9 +87,6 @@ export default function ProductionTrackerApp() {
   // 관련 있는 로그만 필터링
   const relevantLogs = logs.filter(log => log.isRelevant)
   const latestLog = relevantLogs[relevantLogs.length - 1]
-  const currentBpm = latestLog?.bpm || 0
-  const totalBoxes = latestLog?.boxes || 0
-  const totalBottles = latestLog?.bottles || 0
   const lastScanTime = latestLog?.timestamp
 
   const getTimeSinceLastScan = () => {
@@ -98,11 +99,6 @@ export default function ProductionTrackerApp() {
     return `${minutes}분 전`
   }
 
-  const getStatusText = (status: "normal" | "slow" | "unknown" | "정상" | "느림" | "알수없음"): "정상" | "느림" | "알수없음" => {
-    if (status === "normal" || status === "정상") return "정상"
-    if (status === "slow" || status === "느림") return "느림"
-    return "알수없음"
-  }
 
   const handleCameraScan = () => {
     fileInputRef.current?.click()
@@ -166,21 +162,12 @@ export default function ProductionTrackerApp() {
     try {
       console.log("[클라이언트] OCR API 호출 시작")
 
-      // 이전 데이터 준비 (BPM 계산용)
-      const previousLog = relevantLogs[relevantLogs.length - 1]
-      const requestBody: any = { image: base64Image }
-
-      if (previousLog) {
-        requestBody.previousBottleCount = previousLog.bottles
-        requestBody.previousTimestamp = previousLog.timestamp.getTime()
-      }
-
       const response = await fetch("/api/ocr", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify(requestBody),
+        body: JSON.stringify({ image: base64Image }),
       })
 
       console.log("[클라이언트] API 응답 상태:", response.status)
@@ -218,39 +205,21 @@ export default function ProductionTrackerApp() {
 
   const handleEditLog = (log: LogEntry) => {
     setEditingLog(log)
-    setEditValue(log.boxes.toString())
+    setEditValue(log.completedQuantity?.toString() || "0")
   }
 
   const handleSaveEdit = () => {
     if (!editingLog) return
 
-    const newBoxes = Number.parseInt(editValue)
-    if (isNaN(newBoxes) || newBoxes < 0) return
-
-    const newBottles = newBoxes * 100
+    const newCompletedQuantity = Number.parseInt(editValue)
+    if (isNaN(newCompletedQuantity) || newCompletedQuantity < 0) return
 
     setLogs((prev) =>
       prev.map((log) => {
         if (log.id === editingLog.id) {
-          const relevantLogsBeforeThis = prev.filter(l => l.isRelevant && l.timestamp < log.timestamp)
-          let newBpm = log.bpm
-
-          if (relevantLogsBeforeThis.length > 0) {
-            const previousLog = relevantLogsBeforeThis[relevantLogsBeforeThis.length - 1]
-            const timeDiffMinutes = (log.timestamp.getTime() - previousLog.timestamp.getTime()) / 60000
-            const bottlesDiff = newBottles - previousLog.bottles
-
-            if (timeDiffMinutes > 0) {
-              newBpm = Math.round(bottlesDiff / timeDiffMinutes)
-            }
-          }
-
           return {
             ...log,
-            boxes: newBoxes,
-            bottles: newBottles,
-            bpm: Math.max(0, newBpm),
-            status: newBpm >= 50 ? "정상" : "느림",
+            completedQuantity: newCompletedQuantity,
           }
         }
         return log
@@ -287,10 +256,12 @@ export default function ProductionTrackerApp() {
         const newLog: LogEntry = {
           id: Date.now().toString(),
           timestamp,
-          boxes: 0,
-          bottles: 0,
-          bpm: 0,
-          status: "알수없음",
+          operatingLine: null,
+          productionDate: null,
+          plannedQuantity: null,
+          productName: null,
+          completedQuantity: null,
+          lotNo: null,
           imageUrl: capturedImage,
           summary: result.summary,
           isRelevant: false,
@@ -305,32 +276,24 @@ export default function ProductionTrackerApp() {
       }
 
       // 관련 있는 이미지인 경우
-      const boxes = result.boxCount || 0
-      const bottles = result.bottleCount || boxes * 100
-
-      // BPM 계산 (API에서 계산된 값 사용, 없으면 직접 계산)
-      let bpm = result.bpm || 0
-      if (bpm === 0 && relevantLogs.length > 0) {
-        const previousLog = relevantLogs[relevantLogs.length - 1]
-        const timeDiffMinutes = (timestamp.getTime() - previousLog.timestamp.getTime()) / 60000
-        const bottlesDiff = bottles - previousLog.bottles
-
-        if (timeDiffMinutes > 0 && bottlesDiff > 0) {
-          bpm = Math.round(bottlesDiff / timeDiffMinutes)
-        }
-      }
-
-      const status = getStatusText(result.status || (bpm >= 50 ? "normal" : "slow"))
-
-      console.log("[v0] 기록 생성 - 박스:", boxes, "병:", bottles, "BPM:", bpm, "상태:", status)
+      console.log("[v0] 생산 정보 추출:", {
+        운영라인: result.operatingLine,
+        생산일: result.productionDate,
+        생산계획량: result.plannedQuantity,
+        제품명: result.productName,
+        생산완료량: result.completedQuantity,
+        LOT_NO: result.lotNo,
+      })
 
       const newLog: LogEntry = {
         id: Date.now().toString(),
         timestamp,
-        boxes,
-        bottles,
-        bpm: Math.max(0, bpm),
-        status,
+        operatingLine: result.operatingLine,
+        productionDate: result.productionDate,
+        plannedQuantity: result.plannedQuantity,
+        productName: result.productName,
+        completedQuantity: result.completedQuantity,
+        lotNo: result.lotNo,
         imageUrl: capturedImage,
         summary: result.summary,
         isRelevant: true,
@@ -355,9 +318,8 @@ export default function ProductionTrackerApp() {
 
   const chartData = relevantLogs.slice(-10).map((log) => ({
     time: formatKST(log.timestamp, "HH:mm"),
-    boxes: log.boxes,
-    bottles: log.bottles,
-    bpm: log.bpm,
+    planned: log.plannedQuantity || 0,
+    completed: log.completedQuantity || 0,
   }))
 
   return (
@@ -377,29 +339,40 @@ export default function ProductionTrackerApp() {
           </Select>
         </div>
 
-        <div className="grid grid-cols-3 gap-2 text-center">
-          <div className="bg-blue-500 rounded-lg p-3">
-            <div className="text-sm opacity-90">박스</div>
-            <div className="text-2xl font-bold">{totalBoxes.toLocaleString()}</div>
+        {latestLog ? (
+          <div className="space-y-3">
+            <div className="bg-blue-500 rounded-lg p-3">
+              <div className="text-sm opacity-90">제품명</div>
+              <div className="text-lg font-bold">{latestLog.productName || "-"}</div>
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              <div className="bg-blue-500 rounded-lg p-3">
+                <div className="text-sm opacity-90">운영라인</div>
+                <div className="text-xl font-bold">{latestLog.operatingLine || "-"}</div>
+              </div>
+              <div className="bg-blue-500 rounded-lg p-3">
+                <div className="text-sm opacity-90">LOT NO</div>
+                <div className="text-xl font-bold">{latestLog.lotNo || "-"}</div>
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              <div className="bg-blue-500 rounded-lg p-3">
+                <div className="text-sm opacity-90">생산계획량</div>
+                <div className="text-xl font-bold">{latestLog.plannedQuantity?.toLocaleString() || "-"}</div>
+              </div>
+              <div className="bg-blue-500 rounded-lg p-3">
+                <div className="text-sm opacity-90">생산완료량</div>
+                <div className="text-xl font-bold">{latestLog.completedQuantity?.toLocaleString() || "-"}</div>
+              </div>
+            </div>
+            <div className="bg-blue-500 rounded-lg p-3">
+              <div className="text-sm opacity-90">생산일</div>
+              <div className="text-lg font-bold">{latestLog.productionDate || "-"}</div>
+            </div>
           </div>
-          <div className="bg-blue-500 rounded-lg p-3">
-            <div className="text-sm opacity-90">병</div>
-            <div className="text-2xl font-bold">{totalBottles.toLocaleString()}</div>
-          </div>
-          <div className="bg-blue-500 rounded-lg p-3">
-            <div className="text-sm opacity-90">BPM</div>
-            <div className="text-2xl font-bold">{currentBpm}</div>
-          </div>
-        </div>
-
-        {latestLog && (
-          <div className="mt-2 text-center">
-            <span className={`inline-block px-3 py-1 rounded-full text-sm ${
-              latestLog.status === "정상" ? "bg-green-500" :
-              latestLog.status === "느림" ? "bg-orange-500" : "bg-gray-500"
-            }`}>
-              상태: {latestLog.status}
-            </span>
+        ) : (
+          <div className="text-center text-white/80 py-6">
+            아직 스캔한 데이터가 없습니다
           </div>
         )}
       </div>
@@ -482,16 +455,16 @@ export default function ProductionTrackerApp() {
                         return (
                           <div className="bg-white dark:bg-gray-800 p-2 border rounded shadow">
                             <p className="text-sm font-semibold">{label}</p>
-                            <p className="text-sm text-blue-600">박스: {payload[0]?.payload?.boxes}</p>
-                            <p className="text-sm text-green-600">병: {payload[0]?.payload?.bottles}</p>
-                            <p className="text-sm text-purple-600">BPM: {payload[0]?.payload?.bpm}</p>
+                            <p className="text-sm text-blue-600">계획: {payload[0]?.payload?.planned.toLocaleString()}</p>
+                            <p className="text-sm text-green-600">완료: {payload[0]?.payload?.completed.toLocaleString()}</p>
                           </div>
                         )
                       }
                       return null
                     }}
                   />
-                  <Area type="monotone" dataKey="bottles" stroke="#3b82f6" fill="#93c5fd" name="병" />
+                  <Area type="monotone" dataKey="planned" stroke="#93c5fd" fill="#dbeafe" name="계획량" />
+                  <Area type="monotone" dataKey="completed" stroke="#3b82f6" fill="#93c5fd" name="완료량" />
                 </AreaChart>
               </ResponsiveContainer>
             </CardContent>
@@ -528,21 +501,21 @@ export default function ProductionTrackerApp() {
                             {formatKST(log.timestamp, "M월 d일, HH:mm:ss")}
                           </div>
                           {log.isRelevant ? (
-                            <>
-                              <div className="font-semibold mt-1 dark:text-white">
-                                {log.boxes.toLocaleString()} 박스 ({log.bottles.toLocaleString()} 병)
+                            <div className="mt-2 space-y-1">
+                              <div className="font-semibold dark:text-white">
+                                {log.productName || "제품명 없음"}
                               </div>
-                              <div className="text-sm text-gray-600 dark:text-gray-300 mt-1">
-                                속도: {log.bpm} BPM{" "}
-                                <span className={
-                                  log.status === "정상" ? "text-green-600 dark:text-green-400" :
-                                  log.status === "느림" ? "text-orange-600 dark:text-orange-400" :
-                                  "text-gray-600 dark:text-gray-400"
-                                }>
-                                  ({log.status})
-                                </span>
+                              <div className="text-sm text-gray-600 dark:text-gray-300">
+                                운영라인: {log.operatingLine || "-"} | LOT: {log.lotNo || "-"}
                               </div>
-                            </>
+                              <div className="text-sm text-gray-600 dark:text-gray-300">
+                                생산일: {log.productionDate || "-"}
+                              </div>
+                              <div className="text-sm font-medium dark:text-white">
+                                계획: {log.plannedQuantity?.toLocaleString() || "-"} |
+                                완료: {log.completedQuantity?.toLocaleString() || "-"}
+                              </div>
+                            </div>
                           ) : (
                             <div className="mt-1">
                               <span className="inline-block px-2 py-1 bg-yellow-100 dark:bg-yellow-900 text-yellow-800 dark:text-yellow-200 text-xs rounded">
@@ -625,18 +598,15 @@ export default function ProductionTrackerApp() {
           </DialogHeader>
           <div className="space-y-4 py-4">
             <div className="space-y-2">
-              <Label htmlFor="edit-boxes" className="dark:text-white">박스 수량</Label>
+              <Label htmlFor="edit-completed" className="dark:text-white">생산완료량</Label>
               <Input
-                id="edit-boxes"
+                id="edit-completed"
                 type="number"
                 value={editValue}
                 onChange={(e) => setEditValue(e.target.value)}
                 min="0"
                 className="dark:bg-gray-700 dark:border-gray-600 dark:text-white"
               />
-              <div className="text-sm text-gray-500 dark:text-gray-400">
-                병 수량: {(Number.parseInt(editValue) || 0) * 100} 병
-              </div>
             </div>
           </div>
           <DialogFooter>
