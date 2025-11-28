@@ -74,7 +74,7 @@ export async function POST(request: NextRequest) {
 분석 규칙:
 1. 생산 현황판, 디지털 디스플레이, 생산 정보를 보여주는 이미지인지 확인합니다.
 2. 관련 이미지라면 다음 정보를 추출합니다:
-   - operatingLine: 운영라인 (예: "1호기", "A라인" 등, 없으면 null)
+   - operatingLine: 운영라인 (예: "1호기", "A라인" 등, 없으면 null) - 동그라미 친 라인명
    - productionDate: 생산일 (YYYY-MM-DD 형식, 없으면 null)
    - plannedQuantity: 생산계획량 (숫자, 없으면 null)
    - productName: 제품명 (없으면 null)
